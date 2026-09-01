@@ -1,8 +1,10 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt_lib;
 
 void main() {
   runApp(const MyApp());
@@ -37,7 +39,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
   bool _isDownloading = false;
   String _statusMessage = '';
 
-  Future<void> _downloadVideo() async {
+  Future<void> _startDownload() async {
     final url = _urlController.text.trim();
     if (url.isEmpty) {
       setState(() {
@@ -51,27 +53,34 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       _statusMessage = 'جاري تحليل الرابط...';
     });
 
-    final yt = YoutubeExplode();
-
     try {
       await Permission.storage.request();
       await Permission.manageExternalStorage.request();
 
+      if (url.contains('youtube.com') || url.contains('youtu.be')) {
+        await _downloadYouTube(url);
+      } else {
+        await _downloadSocialMedia(url);
+      }
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'حدث خطأ أثناء التنزيل:\n$e';
+      });
+    } finally {
+      setState(() {
+        _isDownloading = false;
+      });
+    }
+  }
+
+  Future<void> _downloadYouTube(String url) async {
+    final yt = yt_lib.YoutubeExplode();
+    try {
       var video = await yt.videos.get(url);
       var manifest = await yt.videos.streamsClient.getManifest(video.id);
-
-      StreamInfo? streamInfo;
-      if (manifest.muxed.isNotEmpty) {
-        streamInfo = manifest.muxed.withHighestBitrate();
-      } else if (manifest.video.isNotEmpty) {
-        streamInfo = manifest.video.withHighestBitrate();
-      } else if (manifest.audio.isNotEmpty) {
-        streamInfo = manifest.audio.withHighestBitrate();
-      }
-
-      if (streamInfo == null) {
-        throw Exception('لم يتم العثور على مسار تنزيل متاح لهذا الفيديو.');
-      }
+      var streamInfo = manifest.muxed.isNotEmpty
+          ? manifest.muxed.withHighestBitrate()
+          : manifest.video.withHighestBitrate();
 
       Directory? downloadsDir = Directory('/storage/emulated/0/Download');
       if (!await downloadsDir.exists()) {
@@ -86,7 +95,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       var fileStream = file.openWrite();
 
       setState(() {
-        _statusMessage = 'جاري تنزيل: ${video.title}';
+        _statusMessage = 'جاري تنزيل فيديو يوتيوب...';
       });
 
       await stream.pipe(fileStream);
@@ -96,15 +105,54 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       setState(() {
         _statusMessage = 'تم التنزيل بنجاح!\nالمسار: $savePath';
       });
-    } catch (e) {
-      setState(() {
-        _statusMessage = 'تنبيه: هذا الفيديو محمي أو غير متاح للتنزيل المباشر.\n$e';
-      });
     } finally {
       yt.close();
-      setState(() {
-        _isDownloading = false;
-      });
+    }
+  }
+
+  Future<void> _downloadSocialMedia(String url) async {
+    setState(() {
+      _statusMessage = 'جاري جلب رابط الميديا...';
+    });
+
+    final apiUrl = Uri.parse('https://api.cobalt.tools/api/json');
+    final response = await http.post(
+      apiUrl,
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({'url': url}),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final String? mediaUrl = data['url'];
+
+      if (mediaUrl != null) {
+        Directory? downloadsDir = Directory('/storage/emulated/0/Download');
+        if (!await downloadsDir.exists()) {
+          downloadsDir = await getExternalStorageDirectory();
+        }
+
+        var savePath = '${downloadsDir!.path}/Media_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+        setState(() {
+          _statusMessage = 'جاري التحميل إلى الهاتف...';
+        });
+
+        final mediaResponse = await http.get(Uri.parse(mediaUrl));
+        final file = File(savePath);
+        await file.writeAsBytes(mediaResponse.bodyBytes);
+
+        setState(() {
+          _statusMessage = 'تم التنزيل بنجاح!\nالمسار: $savePath';
+        });
+      } else {
+        throw Exception('تعذر استخراج رابط الميديا المباشر.');
+      }
+    } else {
+      throw Exception('المنصة غير مدعومة أو الرابط غير صالح.');
     }
   }
 
@@ -127,12 +175,12 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
                       controller: _urlController,
                       decoration: const InputDecoration(
                         border: OutlineInputBorder(),
-                        labelText: 'أدخل رابط الفيديو (YouTube)',
+                        labelText: 'أدخل رابط (YouTube, Twitter, FB, Insta, TikTok)',
                       ),
                     ),
                     const SizedBox(height: 20),
                     ElevatedButton(
-                      onPressed: _isDownloading ? null : _downloadVideo,
+                      onPressed: _isDownloading ? null : _startDownload,
                       child: _isDownloading
                           ? const CircularProgressIndicator()
                           : const Text('بدء التنزيل'),
