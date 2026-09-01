@@ -1,98 +1,100 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:process_run/shell.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 void main() {
-  runApp(const DownloaderApp());
+  runApp(const MyApp());
 }
 
-class DownloaderApp extends StatelessWidget {
-  const DownloaderApp({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Media Downloader',
+      title: 'محمل الوسائط المتقدم',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const MediaDownloaderScreen(),
     );
   }
 }
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class MediaDownloaderScreen extends StatefulWidget {
+  const MediaDownloaderScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<MediaDownloaderScreen> createState() => _MediaDownloaderScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
   final TextEditingController _urlController = TextEditingController();
-  String _selectedQuality = 'best';
-  String _statusMessage = '';
   bool _isDownloading = false;
+  String _statusMessage = '';
 
-  @override
-  void initState() {
-    super.initState();
-    _requestPermissions();
-  }
-
-  Future<void> _requestPermissions() async {
-    await Permission.storage.request();
-    await Permission.manageExternalStorage.request();
-  }
-
-  Future<void> _startDownload() async {
-    if (_urlController.text.trim().isEmpty) return;
+  Future<void> _downloadVideo() async {
+    final url = _urlController.text.trim();
+    if (url.isEmpty) {
+      setState(() {
+        _statusMessage = 'يرجى إدخال رابط الفيديو أولاً';
+      });
+      return;
+    }
 
     setState(() {
       _isDownloading = true;
-      _statusMessage = 'جاري بدء التنزيل...';
+      _statusMessage = 'جاري تحضير التحميل...';
     });
 
+    final yt = YoutubeExplode();
+
     try {
-      final dir = await getExternalStorageDirectory();
-      final outputPath = '${dir?.path}/%(title)s.%(ext)s';
-      final shell = Shell();
+      await Permission.storage.request();
 
-      String formatOption = '-f "bv*+ba/b"';
-      if (_selectedQuality == 'medium') {
-        formatOption = '-f "m4a/mp4"';
-      } else if (_selectedQuality == 'low') {
-        formatOption = '-f "worst"';
-      } else if (_selectedQuality == 'mp3') {
-        formatOption = '-x --audio-format mp3';
-      }
+      var video = await yt.videos.get(url);
+      var manifest = await yt.videos.streamsClient.getManifest(video.id);
+      var streamInfo = manifest.muxed.withHighestBitrate();
 
-      final command = 'yt-dlp $formatOption -o "$outputPath" "${_urlController.text.trim()}"';
-      
-      await shell.run(command);
+      var dir = await getExternalStorageDirectory();
+      var savePath = '${dir!.path}/${video.title.replaceAll(RegExp(r'[^\w\s]+'), '')}.${streamInfo.container.name}';
+
+      var stream = yt.videos.streamsClient.get(streamInfo);
+      var file = File(savePath);
+      var fileStream = file.openWrite();
 
       setState(() {
-        _statusMessage = 'تم التنزيل بنجاح!';
+        _statusMessage = 'جاري التحميل: ${video.title}';
+      });
+
+      await stream.pipe(fileStream);
+      await fileStream.flush();
+      await fileStream.close();
+
+      setState(() {
+        _statusMessage = 'تم التحميل بنجاح!\nالمسار: $savePath';
       });
     } catch (e) {
       setState(() {
         _statusMessage = 'حدث خطأ أثناء التنزيل: $e';
       });
     } finally {
+      yt.close();
       setState(() {
         _isDownloading = false;
       });
     }
   }
 
-  @override
+  @override;
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('مُحمل الوسائط المتقدم'),
+        title: const Text('محمل الوسائط المتقدم'),
         centerTitle: true,
       ),
       body: Padding(
@@ -102,40 +104,26 @@ class _HomeScreenState extends State<HomeScreen> {
             TextField(
               controller: _urlController,
               decoration: const InputDecoration(
-                labelText: 'أدخل رابط الفيديو (TikTok, YouTube, Instagram...)',
                 border: OutlineInputBorder(),
+                labelText: 'أدخل رابط الفيديو (YouTube)',
               ),
-            ),
-            const SizedBox(height: 16),
-            DropdownButton<String>(
-              value: _selectedQuality,
-              isExpanded: true,
-              items: const [
-                DropdownMenuItem(value: 'best', child: Text('أعلى جودة متاحة (High)')),
-                DropdownMenuItem(value: 'medium', child: Text('جودة متوسطة (Medium)')),
-                DropdownMenuItem(value: 'low', child: Text('جودة منخفضة (Low)')),
-                DropdownMenuItem(value: 'mp3', child: Text('صوت فقط (MP3)')),
-              ],
-              onChanged: (val) {
-                if (val != null) setState(() => _selectedQuality = val);
-              },
             ),
             const SizedBox(height: 20),
             ElevatedButton(
-              onPressed: _isDownloading ? null : _startDownload,
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size.fromHeight(50),
-              ),
+              onPressed: _isDownloading ? null : _downloadVideo,
               child: _isDownloading
                   ? const CircularProgressIndicator()
                   : const Text('بدء التنزيل'),
             ),
             const SizedBox(height: 20),
-            Text(_statusMessage, style: const TextStyle(fontSize: 16)),
+            Text(
+              _statusMessage,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14),
+            ),
           ],
         ),
       ),
     );
   }
 }
-         
