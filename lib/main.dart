@@ -50,14 +50,13 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
 
   final List<String> _qualityOptions = ['High', 'Medium', 'Low', 'Audio Only'];
 
-  // رابط سيرفر Render الخاص بك
   final String _backendUrl = 'https://downloader-backend-mfby.onrender.com/extract';
 
   Future<void> _pasteFromClipboard() async {
     ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
     if (data != null && data.text != null) {
       setState(() {
-        _urlController.text = data.text!;
+        _urlController.text = data.text!.trim();
       });
     }
   }
@@ -75,7 +74,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       _isDownloading = true;
       _downloadProgress = 0.0;
       _downloadSizeInfo = '';
-      _statusMessage = 'جاري التنسيق مع السيرفر الخاص...';
+      _statusMessage = 'جاري التحليل واستخراج الفيديو...';
       _downloadedFilePath = null;
     });
 
@@ -210,7 +209,8 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
         throw Exception('السيرفر لم يعثر على رابط فيديو مباشر.');
       }
     } else {
-      throw Exception('فشل السيرفر في تحليل هذا الرابط.');
+      final errData = jsonDecode(response.body);
+      throw Exception(errData['error'] ?? 'فشل السيرفر في تحليل هذا الرابط.');
     }
   }
 
