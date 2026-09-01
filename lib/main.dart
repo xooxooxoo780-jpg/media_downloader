@@ -46,20 +46,40 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
 
   final List<String> _qualityOptions = ['High', 'Medium', 'Low', 'Audio Only'];
 
+  // دالة تنظيف وتعديل الرابط ذكياً
+  String _cleanAndFixUrl(String rawUrl) {
+    String cleanUrl = rawUrl.trim();
+    if (cleanUrl.contains('?')) {
+      cleanUrl = cleanUrl.split('?').first;
+    }
+    
+    // تحويل روابط FB Reels إلى الصيغة القياسية
+    if (cleanUrl.contains('facebook.com/reel/')) {
+      final reelId = cleanUrl.split('/reel/').last.replaceAll('/', '');
+      cleanUrl = 'https://www.facebook.com/watch/?v=$reelId';
+    } else if (cleanUrl.contains('fb.watch/')) {
+      cleanUrl = cleanUrl.replaceAll('m.facebook.com', 'www.facebook.com');
+    }
+    
+    return cleanUrl;
+  }
+
   Future<void> _startDownload() async {
-    final url = _urlController.text.trim();
-    if (url.isEmpty) {
+    final rawUrl = _urlController.text.trim();
+    if (rawUrl.isEmpty) {
       setState(() {
         _statusMessage = 'يرجى إدخال رابط الفيديو أولاً';
       });
       return;
     }
 
+    final url = _cleanAndFixUrl(rawUrl);
+
     setState(() {
       _isDownloading = true;
       _downloadProgress = 0.0;
       _downloadSizeInfo = '';
-      _statusMessage = 'جاري تحليل الرابط...';
+      _statusMessage = 'جاري تحليلات الرابط ذكياً...';
       _downloadedFilePath = null;
     });
 
@@ -70,7 +90,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       if (url.contains('youtube.com') || url.contains('youtu.be')) {
         await _downloadYouTube(url);
       } else {
-        await _downloadSocialMedia(url);
+        await _downloadSocialMedia(url, rawUrl);
       }
     } catch (e) {
       setState(() {
@@ -139,19 +159,36 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
     }
   }
 
-  Future<void> _downloadSocialMedia(String url) async {
+  Future<void> _downloadSocialMedia(String cleanedUrl, String originalUrl) async {
     final apiUrl = Uri.parse('https://api.cobalt.tools/api/json');
-    final response = await http.post(
+    
+    // المحاولة الأولى بالرابط النظيف
+    var response = await http.post(
       apiUrl,
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
       },
       body: jsonEncode({
-        'url': url,
+        'url': cleanedUrl,
         'downloadMode': _selectedQuality == 'Audio Only' ? 'audio' : 'auto'
       }),
     );
+
+    // إذا فشلت، نحاول بالرابط الأصلي تلقائياً
+    if (response.statusCode != 200) {
+      response = await http.post(
+        apiUrl,
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'url': originalUrl,
+          'downloadMode': _selectedQuality == 'Audio Only' ? 'audio' : 'auto'
+        }),
+      );
+    }
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -199,7 +236,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
         throw Exception('تعذر استخراج رابط الميديا المباشر.');
       }
     } else {
-      throw Exception('المنصة غير مدعومة أو الرابط غير صالح.');
+      throw Exception('تعذر التنزيل. يرجى التأكد من أن المنشور عام (Public) وليس خاصاً.');
     }
   }
 
