@@ -90,7 +90,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
     }
   }
 
-  @override;
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -101,25 +101,45 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            TextField(
-              controller: _urlController,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'أدخل رابط الفيديو (YouTube)',
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: _urlController,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: 'أدخل رابط الفيديو (YouTube)',
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    ElevatedButton(
+                      onPressed: _isDownloading ? null : _downloadVideo,
+                      child: _isDownloading
+                          ? const CircularProgressIndicator()
+                          : const Text('بدء التنزيل'),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      _statusMessage,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _isDownloading ? null : _downloadVideo,
-              child: _isDownloading
-                  ? const CircularProgressIndicator()
-                  : const Text('بدء التنزيل'),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              _statusMessage,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 14),
+            const Divider(),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8.0),
+              child: Text(
+                'المطور أمين عادل الشيباني',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
             ),
           ],
         ),
