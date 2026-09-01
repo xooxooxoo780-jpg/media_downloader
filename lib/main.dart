@@ -50,7 +50,6 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
 
   final List<String> _qualityOptions = ['High', 'Medium', 'Low', 'Audio Only'];
 
-  // لصق النص من الحافظة
   Future<void> _pasteFromClipboard() async {
     ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
     if (data != null && data.text != null) {
@@ -60,11 +59,12 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
     }
   }
 
-  // تنظيف الرابط ذكياً
+  // تنظيف ذكي ومضمون لا يحذف النطاق الأصلي للرابط
   String _cleanUrl(String rawUrl) {
     String cleanUrl = rawUrl.trim();
-    if (cleanUrl.contains('?')) {
-      cleanUrl = cleanUrl.split('?').first;
+    final Uri? parsedUri = Uri.tryParse(cleanUrl);
+    if (parsedUri != null && parsedUri.hasAuthority) {
+      return '${parsedUri.scheme}://${parsedUri.authority}${parsedUri.path}';
     }
     return cleanUrl;
   }
@@ -167,7 +167,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
   Future<void> _downloadSocialMedia(String cleanedUrl, String originalUrl) async {
     String? mediaDirectUrl;
 
-    // 1. تجربة المحرك الأول (Cobalt API)
+    // 1. المحرك الأول: Cobalt API
     try {
       final response = await http.post(
         Uri.parse('https://api.cobalt.tools/api/json'),
@@ -180,14 +180,31 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       }
     } catch (_) {}
 
-    // 2. المحرك البديل الخفي للمنصات الصعبة (إنستغرام وفيس بوك)
+    // 2. المحرك الثاني: VKR Downloader
     if (mediaDirectUrl == null) {
       try {
-        final response = await http.get(Uri.parse('https://api.vkrdown.com/v1/get?url=$originalUrl'));
+        final response = await http.get(Uri.parse('https://api.vkrdown.com/v1/get?url=$cleanedUrl'));
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
           if (data['data'] != null && data['data']['downloadUrl'] != null) {
             mediaDirectUrl = data['data']['downloadUrl'];
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3. المحرك الثالث: SaveFrom API fallback
+    if (mediaDirectUrl == null) {
+      try {
+        final response = await http.post(
+          Uri.parse('https://worker.sf-api.com/xhr'),
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'url=${Uri.encodeComponent(cleanedUrl)}',
+        );
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data['url'] != null && data['url'].isNotEmpty) {
+            mediaDirectUrl = data['url'][0]['url'];
           }
         }
       } catch (_) {}
@@ -232,7 +249,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
         _statusMessage = 'تم التنزيل بنجاح!\nالمسار: $savePath';
       });
     } else {
-      throw Exception('تعذر التنزيل. تأكد من أن الحساب أو المنشور عام (Public).');
+      throw Exception('تعذر التنزيل. تأكد من أن المنشور عام (Public) وليس خاصاً.');
     }
   }
 
