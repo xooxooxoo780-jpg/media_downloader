@@ -74,7 +74,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       _isDownloading = true;
       _downloadProgress = 0.0;
       _downloadSizeInfo = '';
-      _statusMessage = 'جاري التحليل واستخراج الفيديو...';
+      _statusMessage = 'جاري تحليل الرابط وتتبع المنشور...';
       _downloadedFilePath = null;
     });
 
@@ -174,7 +174,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
         }
 
         String safeTitle = title.replaceAll(RegExp(r'[^\w\s\u0600-\u06FF]+'), '');
-        var savePath = '${downloadsDir!.path}/$safeTitle.$ext';
+        var savePath = '${downloadsDir!.path}/$savePathTitle.$ext';
 
         final client = http.Client();
         final request = http.Request('GET', Uri.parse(directMediaUrl));
@@ -209,8 +209,12 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
         throw Exception('السيرفر لم يعثر على رابط فيديو مباشر.');
       }
     } else {
-      final errData = jsonDecode(response.body);
-      throw Exception(errData['error'] ?? 'فشل السيرفر في تحليل هذا الرابط.');
+      try {
+        final errData = jsonDecode(response.body);
+        throw Exception(errData['error'] ?? 'فشل السيرفر في تحليل هذا الرابط.');
+      } catch (_) {
+        throw Exception('السيرفر يقوم بالإحماء حالياً أو الاستجابة غير صالحة. يرجى إعادة المحاولة بعد بضع ثوانٍ.');
+      }
     }
   }
 
