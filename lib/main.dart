@@ -48,27 +48,45 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
 
     setState(() {
       _isDownloading = true;
-      _statusMessage = 'جاري تحضير التحميل...';
+      _statusMessage = 'جاري تحليل الرابط...';
     });
 
     final yt = YoutubeExplode();
 
     try {
       await Permission.storage.request();
+      await Permission.manageExternalStorage.request();
 
       var video = await yt.videos.get(url);
       var manifest = await yt.videos.streamsClient.getManifest(video.id);
-      var streamInfo = manifest.muxed.withHighestBitrate();
 
-      var dir = await getExternalStorageDirectory();
-      var savePath = '${dir!.path}/${video.title.replaceAll(RegExp(r'[^\w\s]+'), '')}.${streamInfo.container.name}';
+      StreamInfo? streamInfo;
+      if (manifest.muxed.isNotEmpty) {
+        streamInfo = manifest.muxed.withHighestBitrate();
+      } else if (manifest.video.isNotEmpty) {
+        streamInfo = manifest.video.withHighestBitrate();
+      } else if (manifest.audio.isNotEmpty) {
+        streamInfo = manifest.audio.withHighestBitrate();
+      }
+
+      if (streamInfo == null) {
+        throw Exception('لم يتم العثور على مسار تنزيل متاح لهذا الفيديو.');
+      }
+
+      Directory? downloadsDir = Directory('/storage/emulated/0/Download');
+      if (!await downloadsDir.exists()) {
+        downloadsDir = await getExternalStorageDirectory();
+      }
+
+      String safeTitle = video.title.replaceAll(RegExp(r'[^\w\s\u0600-\u06FF]+'), '');
+      var savePath = '${downloadsDir!.path}/${safeTitle}.${streamInfo.container.name}';
 
       var stream = yt.videos.streamsClient.get(streamInfo);
       var file = File(savePath);
       var fileStream = file.openWrite();
 
       setState(() {
-        _statusMessage = 'جاري التحميل: ${video.title}';
+        _statusMessage = 'جاري تنزيل: ${video.title}';
       });
 
       await stream.pipe(fileStream);
@@ -76,11 +94,11 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       await fileStream.close();
 
       setState(() {
-        _statusMessage = 'تم التحميل بنجاح!\nالمسار: $savePath';
+        _statusMessage = 'تم التنزيل بنجاح!\nالمسار: $savePath';
       });
     } catch (e) {
       setState(() {
-        _statusMessage = 'حدث خطأ أثناء التنزيل: $e';
+        _statusMessage = 'تنبيه: هذا الفيديو محمي أو غير متاح للتنزيل المباشر.\n$e';
       });
     } finally {
       yt.close();
@@ -137,7 +155,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
                 style: TextStyle(
                   color: Colors.red,
                   fontWeight: FontWeight.bold,
-                  fontSize: 16,
+                  fontSize: 18,
                 ),
               ),
             ),
