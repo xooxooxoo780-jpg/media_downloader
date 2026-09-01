@@ -50,6 +50,9 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
 
   final List<String> _qualityOptions = ['High', 'Medium', 'Low', 'Audio Only'];
 
+  // رابط سيرفر Render الخاص بك
+  final String _backendUrl = 'https://downloader-backend-mfby.onrender.com/extract';
+
   Future<void> _pasteFromClipboard() async {
     ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
     if (data != null && data.text != null) {
@@ -57,16 +60,6 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
         _urlController.text = data.text!;
       });
     }
-  }
-
-  // تنظيف ذكي ومضمون لا يحذف النطاق الأصلي للرابط
-  String _cleanUrl(String rawUrl) {
-    String cleanUrl = rawUrl.trim();
-    final Uri? parsedUri = Uri.tryParse(cleanUrl);
-    if (parsedUri != null && parsedUri.hasAuthority) {
-      return '${parsedUri.scheme}://${parsedUri.authority}${parsedUri.path}';
-    }
-    return cleanUrl;
   }
 
   Future<void> _startDownload() async {
@@ -78,13 +71,11 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       return;
     }
 
-    final cleanUrl = _cleanUrl(rawUrl);
-
     setState(() {
       _isDownloading = true;
       _downloadProgress = 0.0;
       _downloadSizeInfo = '';
-      _statusMessage = 'جاري تحليل الرابط...';
+      _statusMessage = 'جاري التنسيق مع السيرفر الخاص...';
       _downloadedFilePath = null;
     });
 
@@ -92,10 +83,10 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       await Permission.storage.request();
       await Permission.manageExternalStorage.request();
 
-      if (cleanUrl.contains('youtube.com') || cleanUrl.contains('youtu.be')) {
-        await _downloadYouTube(cleanUrl);
+      if (rawUrl.contains('youtube.com') || rawUrl.contains('youtu.be')) {
+        await _downloadYouTube(rawUrl);
       } else {
-        await _downloadSocialMedia(cleanUrl, rawUrl);
+        await _downloadViaCustomBackend(rawUrl);
       }
     } catch (e) {
       setState(() {
@@ -164,92 +155,62 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
     }
   }
 
-  Future<void> _downloadSocialMedia(String cleanedUrl, String originalUrl) async {
-    String? mediaDirectUrl;
+  Future<void> _downloadViaCustomBackend(String targetUrl) async {
+    final response = await http.post(
+      Uri.parse(_backendUrl),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'url': targetUrl}),
+    );
 
-    // 1. المحرك الأول: Cobalt API
-    try {
-      final response = await http.post(
-        Uri.parse('https://api.cobalt.tools/api/json'),
-        headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
-        body: jsonEncode({'url': cleanedUrl, 'downloadMode': _selectedQuality == 'Audio Only' ? 'audio' : 'auto'}),
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        mediaDirectUrl = data['url'];
-      }
-    } catch (_) {}
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final String? directMediaUrl = data['direct_url'];
+      final String title = data['title'] ?? 'Media_${DateTime.now().millisecondsSinceEpoch}';
+      final String ext = _selectedQuality == 'Audio Only' ? 'mp3' : (data['ext'] ?? 'mp4');
 
-    // 2. المحرك الثاني: VKR Downloader
-    if (mediaDirectUrl == null) {
-      try {
-        final response = await http.get(Uri.parse('https://api.vkrdown.com/v1/get?url=$cleanedUrl'));
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          if (data['data'] != null && data['data']['downloadUrl'] != null) {
-            mediaDirectUrl = data['data']['downloadUrl'];
+      if (directMediaUrl != null && directMediaUrl.isNotEmpty) {
+        Directory? downloadsDir = Directory('/storage/emulated/0/Download');
+        if (!await downloadsDir.exists()) {
+          downloadsDir = await getExternalStorageDirectory();
+        }
+
+        String safeTitle = title.replaceAll(RegExp(r'[^\w\s\u0600-\u06FF]+'), '');
+        var savePath = '${downloadsDir!.path}/$safeTitle.$ext';
+
+        final client = http.Client();
+        final request = http.Request('GET', Uri.parse(directMediaUrl));
+        final httpResponse = await client.send(request);
+
+        final totalBytes = httpResponse.contentLength ?? 0;
+        var downloadedBytes = 0;
+
+        final file = File(savePath);
+        final fileStream = file.openWrite();
+
+        await httpResponse.stream.forEach((chunk) {
+          downloadedBytes += chunk.length;
+          fileStream.add(chunk);
+          if (totalBytes > 0) {
+            setState(() {
+              _downloadProgress = downloadedBytes / totalBytes;
+              _downloadSizeInfo = '${(downloadedBytes / (1024 * 1024)).toStringAsFixed(1)} MB / ${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+              _statusMessage = 'جاري التحميل... ${(_downloadProgress * 100).toStringAsFixed(0)}%';
+            });
           }
-        }
-      } catch (_) {}
-    }
+        });
 
-    // 3. المحرك الثالث: SaveFrom API fallback
-    if (mediaDirectUrl == null) {
-      try {
-        final response = await http.post(
-          Uri.parse('https://worker.sf-api.com/xhr'),
-          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-          body: 'url=${Uri.encodeComponent(cleanedUrl)}',
-        );
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          if (data['url'] != null && data['url'].isNotEmpty) {
-            mediaDirectUrl = data['url'][0]['url'];
-          }
-        }
-      } catch (_) {}
-    }
+        await fileStream.flush();
+        await fileStream.close();
 
-    if (mediaDirectUrl != null) {
-      Directory? downloadsDir = Directory('/storage/emulated/0/Download');
-      if (!await downloadsDir.exists()) {
-        downloadsDir = await getExternalStorageDirectory();
+        setState(() {
+          _downloadedFilePath = savePath;
+          _statusMessage = 'تم التنزيل بنجاح!\nالمسار: $savePath';
+        });
+      } else {
+        throw Exception('السيرفر لم يعثر على رابط فيديو مباشر.');
       }
-
-      var ext = _selectedQuality == 'Audio Only' ? 'mp3' : 'mp4';
-      var savePath = '${downloadsDir!.path}/Media_${DateTime.now().millisecondsSinceEpoch}.$ext';
-
-      final client = http.Client();
-      final request = http.Request('GET', Uri.parse(mediaDirectUrl));
-      final httpResponse = await client.send(request);
-
-      final totalBytes = httpResponse.contentLength ?? 0;
-      var downloadedBytes = 0;
-
-      final file = File(savePath);
-      final fileStream = file.openWrite();
-
-      await httpResponse.stream.forEach((chunk) {
-        downloadedBytes += chunk.length;
-        fileStream.add(chunk);
-        if (totalBytes > 0) {
-          setState(() {
-            _downloadProgress = downloadedBytes / totalBytes;
-            _downloadSizeInfo = '${(downloadedBytes / (1024 * 1024)).toStringAsFixed(1)} MB / ${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-            _statusMessage = 'جاري التحميل... ${(_downloadProgress * 100).toStringAsFixed(0)}%';
-          });
-        }
-      });
-
-      await fileStream.flush();
-      await fileStream.close();
-
-      setState(() {
-        _downloadedFilePath = savePath;
-        _statusMessage = 'تم التنزيل بنجاح!\nالمسار: $savePath';
-      });
     } else {
-      throw Exception('تعذر التنزيل. تأكد من أن المنشور عام (Public) وليس خاصاً.');
+      throw Exception('فشل السيرفر في تحليل هذا الرابط.');
     }
   }
 
