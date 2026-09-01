@@ -174,7 +174,7 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
         }
 
         String safeTitle = title.replaceAll(RegExp(r'[^\w\s\u0600-\u06FF]+'), '');
-        var savePath = '${downloadsDir!.path}/$savePathTitle.$ext';
+        var savePath = '${downloadsDir!.path}/$safeTitle.$ext';
 
         final client = http.Client();
         final request = http.Request('GET', Uri.parse(directMediaUrl));
