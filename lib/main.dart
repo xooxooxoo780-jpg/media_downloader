@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -19,9 +20,12 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'محمل الوسائط المتقدم',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: const Color(0xFF121212),
+        colorScheme: const ColorScheme.dark(
+          primary: Colors.deepPurpleAccent,
+          secondary: Colors.redAccent,
+        ),
       ),
       home: const MediaDownloaderScreen(),
     );
@@ -46,21 +50,22 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
 
   final List<String> _qualityOptions = ['High', 'Medium', 'Low', 'Audio Only'];
 
-  // دالة تنظيف وتعديل الرابط ذكياً
-  String _cleanAndFixUrl(String rawUrl) {
+  // لصق النص من الحافظة
+  Future<void> _pasteFromClipboard() async {
+    ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data != null && data.text != null) {
+      setState(() {
+        _urlController.text = data.text!;
+      });
+    }
+  }
+
+  // تنظيف الرابط ذكياً
+  String _cleanUrl(String rawUrl) {
     String cleanUrl = rawUrl.trim();
     if (cleanUrl.contains('?')) {
       cleanUrl = cleanUrl.split('?').first;
     }
-    
-    // تحويل روابط FB Reels إلى الصيغة القياسية
-    if (cleanUrl.contains('facebook.com/reel/')) {
-      final reelId = cleanUrl.split('/reel/').last.replaceAll('/', '');
-      cleanUrl = 'https://www.facebook.com/watch/?v=$reelId';
-    } else if (cleanUrl.contains('fb.watch/')) {
-      cleanUrl = cleanUrl.replaceAll('m.facebook.com', 'www.facebook.com');
-    }
-    
     return cleanUrl;
   }
 
@@ -73,13 +78,13 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       return;
     }
 
-    final url = _cleanAndFixUrl(rawUrl);
+    final cleanUrl = _cleanUrl(rawUrl);
 
     setState(() {
       _isDownloading = true;
       _downloadProgress = 0.0;
       _downloadSizeInfo = '';
-      _statusMessage = 'جاري تحليلات الرابط ذكياً...';
+      _statusMessage = 'جاري تحليل الرابط...';
       _downloadedFilePath = null;
     });
 
@@ -87,10 +92,10 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
       await Permission.storage.request();
       await Permission.manageExternalStorage.request();
 
-      if (url.contains('youtube.com') || url.contains('youtu.be')) {
-        await _downloadYouTube(url);
+      if (cleanUrl.contains('youtube.com') || cleanUrl.contains('youtu.be')) {
+        await _downloadYouTube(cleanUrl);
       } else {
-        await _downloadSocialMedia(url, rawUrl);
+        await _downloadSocialMedia(cleanUrl, rawUrl);
       }
     } catch (e) {
       setState(() {
@@ -160,83 +165,74 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
   }
 
   Future<void> _downloadSocialMedia(String cleanedUrl, String originalUrl) async {
-    final apiUrl = Uri.parse('https://api.cobalt.tools/api/json');
-    
-    // المحاولة الأولى بالرابط النظيف
-    var response = await http.post(
-      apiUrl,
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'url': cleanedUrl,
-        'downloadMode': _selectedQuality == 'Audio Only' ? 'audio' : 'auto'
-      }),
-    );
+    String? mediaDirectUrl;
 
-    // إذا فشلت، نحاول بالرابط الأصلي تلقائياً
-    if (response.statusCode != 200) {
-      response = await http.post(
-        apiUrl,
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'url': originalUrl,
-          'downloadMode': _selectedQuality == 'Audio Only' ? 'audio' : 'auto'
-        }),
+    // 1. تجربة المحرك الأول (Cobalt API)
+    try {
+      final response = await http.post(
+        Uri.parse('https://api.cobalt.tools/api/json'),
+        headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+        body: jsonEncode({'url': cleanedUrl, 'downloadMode': _selectedQuality == 'Audio Only' ? 'audio' : 'auto'}),
       );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        mediaDirectUrl = data['url'];
+      }
+    } catch (_) {}
+
+    // 2. المحرك البديل الخفي للمنصات الصعبة (إنستغرام وفيس بوك)
+    if (mediaDirectUrl == null) {
+      try {
+        final response = await http.get(Uri.parse('https://api.vkrdown.com/v1/get?url=$originalUrl'));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data['data'] != null && data['data']['downloadUrl'] != null) {
+            mediaDirectUrl = data['data']['downloadUrl'];
+          }
+        }
+      } catch (_) {}
     }
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final String? mediaUrl = data['url'];
-
-      if (mediaUrl != null) {
-        Directory? downloadsDir = Directory('/storage/emulated/0/Download');
-        if (!await downloadsDir.exists()) {
-          downloadsDir = await getExternalStorageDirectory();
-        }
-
-        var ext = _selectedQuality == 'Audio Only' ? 'mp3' : 'mp4';
-        var savePath = '${downloadsDir!.path}/Media_${DateTime.now().millisecondsSinceEpoch}.$ext';
-
-        final client = http.Client();
-        final request = http.Request('GET', Uri.parse(mediaUrl));
-        final httpResponse = await client.send(request);
-
-        final totalBytes = httpResponse.contentLength ?? 0;
-        var downloadedBytes = 0;
-
-        final file = File(savePath);
-        final fileStream = file.openWrite();
-
-        await httpResponse.stream.forEach((chunk) {
-          downloadedBytes += chunk.length;
-          fileStream.add(chunk);
-          if (totalBytes > 0) {
-            setState(() {
-              _downloadProgress = downloadedBytes / totalBytes;
-              _downloadSizeInfo = '${(downloadedBytes / (1024 * 1024)).toStringAsFixed(1)} MB / ${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-              _statusMessage = 'جاري التحميل... ${(_downloadProgress * 100).toStringAsFixed(0)}%';
-            });
-          }
-        });
-
-        await fileStream.flush();
-        await fileStream.close();
-
-        setState(() {
-          _downloadedFilePath = savePath;
-          _statusMessage = 'تم التنزيل بنجاح!\nالمسار: $savePath';
-        });
-      } else {
-        throw Exception('تعذر استخراج رابط الميديا المباشر.');
+    if (mediaDirectUrl != null) {
+      Directory? downloadsDir = Directory('/storage/emulated/0/Download');
+      if (!await downloadsDir.exists()) {
+        downloadsDir = await getExternalStorageDirectory();
       }
+
+      var ext = _selectedQuality == 'Audio Only' ? 'mp3' : 'mp4';
+      var savePath = '${downloadsDir!.path}/Media_${DateTime.now().millisecondsSinceEpoch}.$ext';
+
+      final client = http.Client();
+      final request = http.Request('GET', Uri.parse(mediaDirectUrl));
+      final httpResponse = await client.send(request);
+
+      final totalBytes = httpResponse.contentLength ?? 0;
+      var downloadedBytes = 0;
+
+      final file = File(savePath);
+      final fileStream = file.openWrite();
+
+      await httpResponse.stream.forEach((chunk) {
+        downloadedBytes += chunk.length;
+        fileStream.add(chunk);
+        if (totalBytes > 0) {
+          setState(() {
+            _downloadProgress = downloadedBytes / totalBytes;
+            _downloadSizeInfo = '${(downloadedBytes / (1024 * 1024)).toStringAsFixed(1)} MB / ${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+            _statusMessage = 'جاري التحميل... ${(_downloadProgress * 100).toStringAsFixed(0)}%';
+          });
+        }
+      });
+
+      await fileStream.flush();
+      await fileStream.close();
+
+      setState(() {
+        _downloadedFilePath = savePath;
+        _statusMessage = 'تم التنزيل بنجاح!\nالمسار: $savePath';
+      });
     } else {
-      throw Exception('تعذر التنزيل. يرجى التأكد من أن المنشور عام (Public) وليس خاصاً.');
+      throw Exception('تعذر التنزيل. تأكد من أن الحساب أو المنشور عام (Public).');
     }
   }
 
@@ -250,87 +246,131 @@ class _MediaDownloaderScreenState extends State<MediaDownloaderScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         title: const Text(
           'المطور أمين عادل الشيباني',
           style: TextStyle(
-            color: Colors.red,
+            color: Colors.redAccent,
             fontWeight: FontWeight.bold,
-            fontSize: 20,
+            fontSize: 22,
           ),
         ),
         centerTitle: true,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: SingleChildScrollView(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF1E1B2E), Color(0xFF0F0C20)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
           child: Column(
             children: [
-              TextField(
-                controller: _urlController,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: 'أدخل رابط الفيديو (YouTube, Twitter, FB, Insta, TikTok)',
-                ),
-              ),
-              const SizedBox(height: 15),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('دقة التنزيل:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  DropdownButton<String>(
-                    value: _selectedQuality,
-                    items: _qualityOptions.map((String quality) {
-                      return DropdownMenuItem<String>(
-                        value: quality,
-                        child: Text(quality),
-                      );
-                    }).toList(),
-                    onChanged: (newValue) {
-                      setState(() {
-                        _selectedQuality = newValue!;
-                      });
-                    },
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _urlController,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                filled: true,
+                                fillColor: Colors.white10,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                labelText: 'أدخل الرابط (YouTube, Insta, FB, TikTok, X)',
+                                labelStyle: const TextStyle(color: Colors.white70),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: _pasteFromClipboard,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.deepPurpleAccent,
+                              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: const Text('لصق', style: TextStyle(color: Colors.white)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 15),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('دقة التنزيل:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                          DropdownButton<String>(
+                            value: _selectedQuality,
+                            dropdownColor: const Color(0xFF1E1B2E),
+                            style: const TextStyle(color: Colors.white),
+                            items: _qualityOptions.map((String quality) {
+                              return DropdownMenuItem<String>(
+                                value: quality,
+                                child: Text(quality),
+                              );
+                            }).toList(),
+                            onChanged: (newValue) {
+                              setState(() {
+                                _selectedQuality = newValue!;
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton(
+                        onPressed: _isDownloading ? null : _startDownload,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.redAccent,
+                          minimumSize: const Size.fromHeight(50),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: _isDownloading
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Text('بدء التنزيل', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                      ),
+                      const SizedBox(height: 20),
+                      if (_isDownloading) ...[
+                        LinearProgressIndicator(value: _downloadProgress > 0 ? _downloadProgress : null, color: Colors.redAccent),
+                        const SizedBox(height: 10),
+                        Text(_downloadSizeInfo, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                        const SizedBox(height: 10),
+                      ],
+                      Text(
+                        _statusMessage,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 14, color: Colors.white70),
+                      ),
+                      if (_downloadedFilePath != null && !_isDownloading) ...[
+                        const SizedBox(height: 20),
+                        ElevatedButton.icon(
+                          onPressed: _openFile,
+                          icon: const Icon(Icons.play_arrow, color: Colors.white),
+                          label: const Text('تشغيل', style: TextStyle(color: Colors.white, fontSize: 16)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            minimumSize: const Size.fromHeight(50),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                ],
-              ),
-              const SizedBox(height: 15),
-              ElevatedButton(
-                onPressed: _isDownloading ? null : _startDownload,
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(45),
                 ),
-                child: _isDownloading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('بدء التنزيل', style: TextStyle(fontSize: 16)),
               ),
-              const SizedBox(height: 20),
-              if (_isDownloading) ...[
-                LinearProgressIndicator(value: _downloadProgress > 0 ? _downloadProgress : null),
-                const SizedBox(height: 10),
-                Text(_downloadSizeInfo, style: const TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-              ],
-              Text(
-                _statusMessage,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 14),
-              ),
-              if (_downloadedFilePath != null && !_isDownloading) ...[
-                const SizedBox(height: 20),
-                ElevatedButton.icon(
-                  onPressed: _openFile,
-                  icon: const Icon(Icons.play_arrow, color: Colors.white),
-                  label: const Text('تشغيل', style: TextStyle(color: Colors.white, fontSize: 16)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    minimumSize: const Size.fromHeight(45),
-                  ),
-                ),
-              ],
             ],
           ),
         ),
