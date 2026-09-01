@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.media_downloader"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
